@@ -1,9 +1,7 @@
 package org.trustnet.api.client;
 
-import android.util.Base64;
 import android.util.Log;
 
-import org.springframework.web.client.RestClientException;
 import org.trustnet.api.dto.Resource;
 import org.trustnet.api.dto.SubmitRequest;
 import org.trustnet.api.dto.XferValue;
@@ -15,11 +13,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.json.MappingJackson2HttpMessageConverter;
 import org.springframework.web.client.RestTemplate;
-import org.trustnet.api.dto.Anchor;
-import org.trustnet.api.dto.AnchorRequest;
 import org.trustnet.api.dto.Opcode;
 import org.trustnet.api.dto.SubmitResult;
-import org.trustnet.api.dto.Transaction;
 
 /**
  * Client library for spendr test application
