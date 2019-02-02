@@ -5,7 +5,9 @@ import android.util.Log;
 import org.ethereum.crypto.ECKey;
 import org.spongycastle.util.encoders.Base64;
 import org.spongycastle.util.encoders.Hex;
+import org.trustnet.api.dto.SubmitRequest;
 
+import java.nio.ByteBuffer;
 import java.security.KeyStore;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -17,18 +19,29 @@ import java.security.NoSuchAlgorithmException;
 public class Submitter {
     private ECKey key = new ECKey();
 
-    private int nextSeq = 1;
+    private byte[] pubKey = key.getPubKey();
+    private String pubKeyHex = Hex.toHexString(pubKey);
+
+    private long nextSeq = 1;
 
     private String lastTx = Hex.toHexString(new byte[64]);
 
+    private static byte[] shardId;
+    private static String shardIdHex;
+
     // default instance
     private static Submitter instance = new Submitter();
+
+    private static ByteBuffer buffer = ByteBuffer.allocate(Long.BYTES);
 
     // make constructor private
     private Submitter() {}
 
     // initialize submitter keys from DB
-    public static boolean initialize() {
+    public static boolean initialize(String shardId) {
+        Submitter.shardId = shardId.getBytes();
+        Submitter.shardIdHex = Hex.toHexString(Submitter.shardId);
+
         // fetch application's private key from android keystore
         // TBD
 
@@ -60,7 +73,7 @@ public class Submitter {
     }
 
     // get submitter's sequence for next transaction
-    public int getNextSeq() {
+    public long getNextSeq() {
         return nextSeq;
     }
 
@@ -75,36 +88,65 @@ public class Submitter {
         nextSeq++;
     }
 
-    // sign a payload and return base64 encoded signature
-    public String sign(long nonce, byte[] payload) throws NoSuchAlgorithmException {
-        // build network byte order nonce
-        System.out.printf("Nonce: %d\n", nonce);
-        byte[] bytes = new byte[8 + payload.length];
-        bytes[0] = (byte)(nonce >> 56);
-        System.out.printf("byte: %d\n", bytes[0]);
-        bytes[1] = (byte)(nonce >> 48);
-        System.out.printf("byte: %d\n", bytes[1]);
-        bytes[2] = (byte)(nonce >> 40);
-        System.out.printf("byte: %d\n", bytes[2]);
-        bytes[3] = (byte)(nonce >> 32);
-        System.out.printf("byte: %d\n", bytes[3]);
-        bytes[4] = (byte)(nonce >> 24);
-        System.out.printf("byte: %d\n", bytes[4]);
-        bytes[5] = (byte)(nonce >> 16);
-        System.out.printf("byte: %d\n", bytes[5]);
-        bytes[6] = (byte)(nonce >> 8);
-        System.out.printf("byte: %d\n", bytes[6]);
-        bytes[7] = (byte)(nonce);
-        System.out.printf("byte: %d\n", bytes[7]);
-//        for (int i=8; i>0; i--) {
-//            bytes[i-1] = (byte)(nonce % 256);
-//            nonce = nonce / 256;
-//        }
-        // append payload
-        System.arraycopy(payload,0, bytes, 8, payload.length);
-        // create SHA-256 digest
+    // create a new transaction request for payload using correct submitter sequence
+    public SubmitRequest newRequest(String payload) throws NoSuchAlgorithmException {
+        // decode base64 payload to bytes
+        byte[] payloadBytes = Base64.decode(payload);
+
+        // build serialized bytes as per protocol schema
+        // ref: https://github.com/trust-net/dag-lib-go/blob/iter_8/docs/Transaction.md#request-signature
+        byte[] bytes = new byte[payloadBytes.length+shardId.length+145];
+        int startPos = 0;
+
+        Log.d("SubmitRequest", "creating byte sequence for signature");
+
+        // start with payload of the request
+        System.arraycopy(payloadBytes, 0, bytes, startPos, payloadBytes.length);
+        startPos += payloadBytes.length;
+
+        Log.d("SubmitRequest", "copied payload bytes");
+
+        // follow that with shard ID for this request
+        System.arraycopy(shardId, 0, bytes, startPos, shardId.length);
+        startPos += shardId.length;
+        Log.d("SubmitRequest", "copied shard_id bytes");
+
+        // add submitter's last transaction ID
+        byte[] lastTxBytes = Hex.decode(lastTx);
+        System.arraycopy(lastTxBytes, 0, bytes, startPos, lastTxBytes.length);
+        startPos += lastTxBytes.length;
+        Log.d("SubmitRequest", "copied last_tx bytes");
+
+        // then the submitter's public ID itself
+        System.arraycopy(pubKey, 0, bytes, startPos, pubKey.length);
+        startPos += pubKey.length;
+        Log.d("SubmitRequest", "copied submitter_id bytes");
+
+        // add submiter's sequence for this transaction request
+        buffer.clear();
+        buffer.putLong(nextSeq);
+        byte[] longBytes = buffer.array();
+        System.arraycopy(longBytes, 0, bytes, startPos, longBytes.length);
+        startPos += longBytes.length;
+        Log.d("SubmitRequest", "copied submitter_seq bytes");
+
+        // finally the padding to meet PoW needs
+        long padding = 0;
+        buffer.clear();
+        buffer.putLong(padding);
+        longBytes = buffer.array();
+        System.arraycopy(longBytes, 0, bytes, startPos, longBytes.length);
+        startPos += longBytes.length;
+        Log.d("SubmitRequest", "copied padding bytes");
+
+        // compute SHA256 digest of the bytes
         MessageDigest digest = MessageDigest.getInstance("SHA-256");
+
         // get signature using private key
-        return key.sign(digest.digest(bytes)).toBase64();
+        String signature = key.sign(digest.digest(bytes)).toBase64();
+        Log.d("SubmitRequest", "created signature: " + signature);
+
+        // build the transaction request with parameters and return
+        return new SubmitRequest(payload, shardIdHex, pubKeyHex, lastTx, nextSeq, padding, signature);
     }
 }
